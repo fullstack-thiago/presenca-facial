@@ -227,7 +227,7 @@ export default function App() {
           .order('attended_at', { ascending: false })
           .limit(1);
 
-        if (!last.length || new Date(last[0].attended_at) < now - 5*60*1000) {
+        if (!last.length || new Date(last[0].attended_at) < now - 20*1000) {
           await supabase.from('attendances').insert([{
             company_id: selectedCompany,
             employee_id: matchedEmployeeId,
@@ -240,7 +240,7 @@ export default function App() {
         }
       }
     }
-  }, 3000); // roda a cada 3s
+  }, 300); // roda a cada 3s
 }
 
 function stopAttendanceLoop() {
