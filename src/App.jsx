@@ -21,16 +21,17 @@ Observação: Este arquivo é um esqueleto didático. Em produção ajuste RLS, 
 */
 
 import React, { useEffect, useRef, useState } from 'react';
-import * as faceapi from 'face-api.js';
 import { createClient } from '@supabase/supabase-js';
 import * as XLSX from 'xlsx';
+
+let faceapi;
+if (typeof window !== 'undefined') {
+  faceapi = await import('face-api.js');
+}
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const MODEL_URL = '/models';
-await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-
 
 export default function App() {
   const [route, setRoute] = useState('dashboard'); // 'login','dashboard','register','attendance','history'
