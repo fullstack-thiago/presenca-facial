@@ -44,6 +44,7 @@ export default function App() {
   const [selectedCompany, setSelectedCompany] = useState(null);
 
   // Camera / attendance
+  const attendanceInterval = useRef(null);
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [facingMode, setFacingMode] = useState('environment');
@@ -173,38 +174,79 @@ export default function App() {
     }
   }
 
-  // Attendance flow: load labeled descriptors, match, insert attendance
-  async function runAttendanceLoop() {
-    if (!selectedCompany) { alert('Selecione uma empresa antes'); return; }
-    setStatusMsg('Carregando funcionários...');
-    const { data: emps } = await supabase.from('employees').select('*').eq('company_id', selectedCompany);
-    if (!emps || emps.length === 0) { setStatusMsg('Nenhum funcionário cadastrado'); return; }
-    // build labeled descriptors
-    const labeled = emps.map(e => new faceapi.LabeledFaceDescriptors(e.id, (e.descriptors || []).map(d => new Float32Array(d))));
-    const faceMatcher = new faceapi.FaceMatcher(labeled, 0.55);
+ async function startAttendanceLoop() {
+  if (!selectedCompany) { 
+    setStatusMsg('Selecione uma empresa primeiro');
+    return; 
+  }
 
-    setStatusMsg('Iniciado: apontar para a câmera para marcar presença');
-    // single-check loop: detect once per press (could be continuous)
+  const { data: emps } = await supabase
+    .from('employees')
+    .select('*')
+    .eq('company_id', selectedCompany);
+
+  if (!emps?.length) {
+    setStatusMsg('Nenhum funcionário cadastrado');
+    return;
+  }
+
+  const labeled = emps.map(e => 
+    new faceapi.LabeledFaceDescriptors(
+      e.id.toString(), 
+      (e.descriptors || []).map(d => new Float32Array(d))
+    )
+  );
+
+  const faceMatcher = new faceapi.FaceMatcher(labeled, 0.55);
+
+  setStatusMsg('🔄 Reconhecimento contínuo iniciado...');
+
+  // se já tinha loop rodando, para
+  if (attendanceInterval.current) clearInterval(attendanceInterval.current);
+
+  attendanceInterval.current = setInterval(async () => {
     const options = new faceapi.TinyFaceDetectorOptions();
     const detection = await faceapi
       .detectSingleFace(videoRef.current, options)
       .withFaceLandmarks()
       .withFaceDescriptor();
-    if (!detection) { setStatusMsg('Nenhum rosto detectado.'); return; }
-    const best = faceMatcher.findBestMatch(detection.descriptor);
-    if (!best || best.label === 'unknown') {
-      setStatusMsg('Rosto não identificado');
-      return;
+
+    if (detection) {
+      const best = faceMatcher.findBestMatch(detection.descriptor);
+
+      if (best.label !== 'unknown') {
+        const confidence = best.distance;
+        const matchedEmployeeId = best.label;
+
+        // evita duplicação em menos de 5 minutos
+        const now = new Date();
+        const { data: last } = await supabase
+          .from('attendances')
+          .select('*')
+          .eq('employee_id', matchedEmployeeId)
+          .order('attended_at', { ascending: false })
+          .limit(1);
+
+        if (!last.length || new Date(last[0].attended_at) < now - 5*60*1000) {
+          await supabase.from('attendances').insert([{
+            company_id: selectedCompany,
+            employee_id: matchedEmployeeId,
+            confidence
+          }]);
+
+          setStatusMsg(`✅ Presença registrada: ${matchedEmployeeId} (conf: ${confidence.toFixed(2)})`);
+        } else {
+          setStatusMsg(`⚠️ ${matchedEmployeeId} já registrado recentemente`);
+        }
+      }
     }
-    // best.label é o employee id porque usamos e.id como label
-    const matchedEmployeeId = best.label;
-    const confidence = best.distance;
-    // opcional: capturar foto do video
-    const photoUrl = null; // para simplicidade deixamos nulo (poderia fazer upload)
-    const { data, error } = await supabase.from('attendances').insert([{ employee_id: matchedEmployeeId, company_id: selectedCompany, confidence }]);
-    if (error) { console.error(error); setStatusMsg('Erro ao salvar presença'); }
-    else { setStatusMsg('Presença registrada (ID): ' + matchedEmployeeId + ' conf: ' + confidence.toFixed(3)); }
-  }
+  }, 3000); // roda a cada 3s
+}
+
+function stopAttendanceLoop() {
+  if (attendanceInterval.current) clearInterval(attendanceInterval.current);
+  setStatusMsg('⏹️ Reconhecimento parado');
+}
 
   function exportAttendancesToExcel() {
     if (!attendances || attendances.length === 0) { alert('Sem registros'); return; }
@@ -290,9 +332,11 @@ export default function App() {
               <p className="mt-2">Empresa: {companies.find(c=>c.id===selectedCompany)?.name || 'nenhuma selecionada'}</p>
               <div className="flex gap-2 mt-2">
                 <button className="px-3 py-2 bg-green-600 text-white rounded" onClick={openCamera}>Abrir Câmera</button>
-                <button className="px-3 py-2 bg-purple-600 text-white rounded" onClick={runAttendanceLoop}>Verificar e Registrar</button>
-                <button className="px-3 py-2 bg-yellow-500 text-white rounded" onClick={switchFacing}>Trocar Camera</button>
+                <button className="px-3 py-2 bg-purple-600 text-white rounded" onClick={startAttendanceLoop}>Iniciar Reconhecimento</button>
+                <button className="px-3 py-2 bg-red-600 text-white rounded" onClick={stopAttendanceLoop}>Parar</button>
+                <button className="px-3 py-2 bg-yellow-500 text-white rounded" onClick={switchFacing}>Trocar Câmera</button>
               </div>
+
               <video ref={videoRef} className="w-full mt-2 rounded border" autoPlay muted playsInline style={{maxHeight:360}} />
               <p className="mt-2 text-sm">Status: {statusMsg}</p>
             </section>
